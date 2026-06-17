@@ -41,20 +41,15 @@ Block.Types = {
         transparent = false,
         uv = { all = {4, 0} } 
     },
-    -- ЭМИССИВНЫЕ БЛОКИ С ОСВЕЩЕНИЕМ (добавляем 8 = Факел)
+    -- 8 = Факел. 9-й слот убран: там в этом terrain.png была текстура, похожая на гриб.
     [8] = { 
         name = "Факел", 
         transparent = true,
+        collidable = false,
+        model = "torch",
         uv = { all = {0, 5} },
         emissive = true,
         light_level = 14
-    },
-    [9] = {
-        name = "Светящийся камень",
-        transparent = false,
-        uv = { all = {13, 1} },
-        emissive = true,
-        light_level = 15
     },
 }
 
@@ -70,6 +65,19 @@ function Block.isTransparent(id)
     local b = Block.Types[id]
     if not b then return true end
     return b.transparent == true
+end
+
+function Block.isCollidable(id)
+    local b = Block.Types[id]
+    if not b or id == 0 then return false end
+    if b.collidable ~= nil then return b.collidable == true end
+    return true
+end
+
+function Block.getModel(id)
+    local b = Block.Types[id]
+    if not b then return "cube" end
+    return b.model or "cube"
 end
 
 function Block.isEmissive(id)

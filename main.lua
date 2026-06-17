@@ -28,6 +28,10 @@ function love.mousepressed(x, y, button)
     Game.mousepressed(x, y, button)
 end
 
+function love.wheelmoved(x, y)
+    if Game.wheelmoved then Game.wheelmoved(x, y) end
+end
+
 function love.keypressed(key)
     Game.keys[key] = true
     Game.keypressed(key)

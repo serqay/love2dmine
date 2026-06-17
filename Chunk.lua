@@ -37,6 +37,59 @@ local faces_def = {
     },
 }
 
+local function getBrightness(chunk, wx, y, wz, id, shade)
+    local block_light = chunk.world:getLight(wx, y, wz, "block")
+    local sky_light = chunk.world:getLight(wx, y, wz, "sky")
+    if Block.isEmissive(id) then
+        block_light = math.max(block_light, Block.getLightLevel(id))
+    end
+    
+    local max_light = math.max(block_light, sky_light)
+    local final_light = max_light / 15.0
+    local brightness = shade * (0.10 + final_light * 0.90)
+    return brightness, brightness, brightness, 1
+end
+
+local function addQuad(vertices, p1, p2, p3, p4, u1, v1, u2, v2, r, g, b, a)
+    table.insert(vertices, {p1[1], p1[2], p1[3], u1, v2, r, g, b, a})
+    table.insert(vertices, {p2[1], p2[2], p2[3], u2, v2, r, g, b, a})
+    table.insert(vertices, {p3[1], p3[2], p3[3], u2, v1, r, g, b, a})
+    
+    table.insert(vertices, {p1[1], p1[2], p1[3], u1, v2, r, g, b, a})
+    table.insert(vertices, {p3[1], p3[2], p3[3], u2, v1, r, g, b, a})
+    table.insert(vertices, {p4[1], p4[2], p4[3], u1, v1, r, g, b, a})
+end
+
+local function addTorchMesh(vertices, chunk, wx, y, wz, id)
+    local u, v = Block.getUV(id, "all")
+    local eps = 0.005 * Block.UV_SIZE
+    local u1, v1 = u + eps, v + eps
+    local u2, v2 = u + Block.UV_SIZE - eps, v + Block.UV_SIZE - eps
+    
+    local ox, oy, oz = wx - 1, y - 1, wz - 1
+    local c = 0.5
+    local half_width = 0.18
+    local h = 0.78
+    local bottom = 0.02
+    
+    local r, g, b, a = getBrightness(chunk, wx, y, wz, id, 1.0)
+    
+    -- Классическая простая моделька факела: две перекрещенные плоскости с прозрачной текстурой.
+    addQuad(vertices,
+        {ox + c - half_width, oy + bottom, oz + c - half_width},
+        {ox + c + half_width, oy + bottom, oz + c + half_width},
+        {ox + c + half_width, oy + h,      oz + c + half_width},
+        {ox + c - half_width, oy + h,      oz + c - half_width},
+        u1, v1, u2, v2, r, g, b, a)
+    
+    addQuad(vertices,
+        {ox + c + half_width, oy + bottom, oz + c - half_width},
+        {ox + c - half_width, oy + bottom, oz + c + half_width},
+        {ox + c - half_width, oy + h,      oz + c + half_width},
+        {ox + c + half_width, oy + h,      oz + c - half_width},
+        u1, v1, u2, v2, r, g, b, a)
+end
+
 function Chunk.new(cx, cz, world)
     local self = setmetatable({}, Chunk)
     self.cx, self.cz = cx, cz
@@ -46,12 +99,15 @@ function Chunk.new(cx, cz, world)
     self.size_z = 16
     self.data = {}
     self.light = {}        -- light levels [x][y][z] = {sky, block}
+    self.surface = {}      -- исходная высота земли [x][z], нужна для затемнения шахт/пещер
     self.mesh = nil
     self.dirty = true
+    self.priority_dirty = false
     
     for x = 1, self.size_x do
         self.data[x] = {}
         self.light[x] = {}
+        self.surface[x] = {}
         for y = 1, self.size_y do
             self.data[x][y] = {}
             self.light[x][y] = {}
@@ -72,8 +128,14 @@ function Chunk:generate()
         for z = 1, self.size_z do
             local worldZ = (self.cz - 1) * self.size_z + z
             
-            local n = mat.fbm2D(worldX, worldZ, 4)
-            local h = math.floor(n * 16) + 4
+            local h
+            if self.world and self.world.getTerrainHeightAt then
+                h = self.world:getTerrainHeightAt(worldX, worldZ)
+            else
+                local n = mat.fbm2D(worldX, worldZ, 4)
+                h = math.floor(n * 16) + 4
+            end
+            self.surface[x][z] = h
             
             for y = 1, self.size_y do
                 if y > h then
@@ -159,7 +221,10 @@ function Chunk:buildMesh()
                 if id and id ~= 0 then
                     local wz = (self.cz - 1) * self.size_z + z
                     
-                    for _, face in ipairs(faces_def) do
+                    if Block.getModel(id) == "torch" then
+                        addTorchMesh(vertices, self, wx, y, wz, id)
+                    else
+                        for _, face in ipairs(faces_def) do
                         local nx = wx + face.neighbor[1]
                         local ny = y + face.neighbor[2]
                         local nz = wz + face.neighbor[3]
@@ -177,8 +242,15 @@ function Chunk:buildMesh()
                             local u2, v2_uv = u + Block.UV_SIZE - eps, v + Block.UV_SIZE - eps
                             
                             -- === ОСВЕЩЕНИЕ ===
-                            local block_light = self:getLight(x, y, z, "block")
-                            local sky_light = self:getLight(x, y, z, "sky")
+                            -- ВАЖНО: свет для видимой грани нужно брать НЕ из самого блока,
+                            -- а из соседней прозрачной клетки, куда эта грань "смотрит".
+                            -- Solid-блоки в Lighting.lua обычно имеют light = 0, поэтому старый код
+                            -- делал почти все грани темными даже под открытым небом.
+                            local block_light = self.world:getLight(nx, ny, nz, "block")
+                            local sky_light = self.world:getLight(nx, ny, nz, "sky")
+                            if Block.isEmissive(id) then
+                                block_light = math.max(block_light, Block.getLightLevel(id))
+                            end
                             
                             -- Базовый directional shade
                             local shade = 1.0
@@ -195,10 +267,12 @@ function Chunk:buildMesh()
                             -- Яркость: в полной темноте ~10%, при максимальном свете 100%
                             local brightness = shade * (0.10 + final_light * 0.90)
                             
-                            local r = math.floor(255 * brightness)
-                            local g = math.floor(255 * brightness)
-                            local b = math.floor(255 * brightness)
-                            local a = 255
+                            -- LÖVE 11.x использует диапазон цветов 0..1 даже для VertexColor/byte.
+                            -- Если передавать 0..255, компоненты зажимаются в 1 и освещение визуально пропадает.
+                            local r = brightness
+                            local g = brightness
+                            local b = brightness
+                            local a = 1
                             
                             -- Добавляем вершины
                             table.insert(vertices, {ox+v1[1], oy+v1[2], oz+v1[3], u1, v2_uv, r, g, b, a})
@@ -209,6 +283,7 @@ function Chunk:buildMesh()
                             table.insert(vertices, {ox+v3[1], oy+v3[2], oz+v3[3], u2, v1_uv, r, g, b, a})
                             table.insert(vertices, {ox+v4[1], oy+v4[2], oz+v4[3], u1, v1_uv, r, g, b, a})
                         end
+                    end
                     end
                 end
             end

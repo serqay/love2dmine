@@ -1,3 +1,5 @@
+local Block = require("Block")
+
 local Physics = {}
 
 function Physics.getSurroundingBlocks(world, pos, size)
@@ -13,7 +15,7 @@ function Physics.getSurroundingBlocks(world, pos, size)
         for y = minY, maxY do
             for z = minZ, maxZ do
                 local block = world:getBlock(x, y, z)
-                if block and block ~= 0 then
+                if block and Block.isCollidable(block) then
                     table.insert(blocks, {
                         x = x, y = y, z = z,
                         minX = x - 1, maxX = x,
